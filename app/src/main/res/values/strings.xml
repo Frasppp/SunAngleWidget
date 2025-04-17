@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SunAngleWidget</string>
+
+    <string name="places_api_key">AIzaSyDtDIw8tiMJdqER98flfOO21u_44LaHecQ</string>
+</resources>
