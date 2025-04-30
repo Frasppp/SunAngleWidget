@@ -1,9 +1,12 @@
 package com.fraspp.sunanglewidget;
 
 import android.Manifest;
+import android.app.PendingIntent;
 import android.appwidget.AppWidgetManager;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.location.Address;
 import android.location.Geocoder;
@@ -38,9 +41,10 @@ public class SunAngleUpdateWorker extends Worker {
     private static final double FALLBACK_LON = 20.65;
     private static final Pattern POSTCODE_PATTERN =
             Pattern.compile("\\b\\d{3}\\s\\d{2}\\s*([\\p{L}ÅÄÖåäö]+)", Pattern.UNICODE_CASE);
+    private static final String PREFS = "sun_prefs";
 
-    public SunAngleUpdateWorker(@NonNull Context context, @NonNull WorkerParameters params) {
-        super(context, params);
+    public SunAngleUpdateWorker(@NonNull Context ctx, @NonNull WorkerParameters p) {
+        super(ctx, p);
     }
 
     @NonNull
@@ -57,6 +61,14 @@ public class SunAngleUpdateWorker extends Worker {
         AppWidgetManager awm = AppWidgetManager.getInstance(ctx);
         RemoteViews rv = new RemoteViews(ctx.getPackageName(), R.layout.widget_sun_angle);
 
+        PendingIntent pi = PendingIntent.getBroadcast(
+                ctx, widgetId,
+                new Intent(ctx, SunAngleWidgetProvider.class)
+                        .setAction(SunAngleWidgetProvider.ACTION_UPDATE)
+                        .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId),
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        rv.setOnClickPendingIntent(R.id.widget_layout, pi);
+
         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED) {
             rv.setTextViewText(R.id.widget_text, "Behörighet saknas");
@@ -66,6 +78,7 @@ public class SunAngleUpdateWorker extends Worker {
 
         double lat;
         double lon;
+        SharedPreferences p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
 
         try {
             FusedLocationProviderClient flp = LocationServices.getFusedLocationProviderClient(ctx);
@@ -82,31 +95,35 @@ public class SunAngleUpdateWorker extends Worker {
             if (loc == null) throw new Exception("location null");
             lat = loc.getLatitude();
             lon = loc.getLongitude();
+            p.edit().putFloat("lat", (float) lat).putFloat("lon", (float) lon).apply();
         } catch (Exception e) {
-            Log.w(TAG, "Location error, fallback", e);
-            lat = FALLBACK_LAT;
-            lon = FALLBACK_LON;
+            lat = p.getFloat("lat", Float.NaN);
+            lon = p.getFloat("lon", Float.NaN);
+            if (Double.isNaN(lat))
+                lat = FALLBACK_LAT;
+            if (Double.isNaN(lon))
+                lon = FALLBACK_LON;
+            Log.w(TAG, "Location error, using cached/fallback", e);
         }
 
         String locText = String.format(Locale.US, "%.2f,%.2f", lat, lon);
-        Geocoder geocoder = new Geocoder(ctx, Locale.getDefault());
+        Geocoder geocoder = new Geocoder(ctx, Locale.forLanguageTag("en"));
         CountDownLatch latch = new CountDownLatch(1);
         String[] res = {locText};
-        geocoder.getFromLocation(lat, lon, 1, addresses -> {
-            if (addresses != null && !addresses.isEmpty())
-                res[0] = extractName(addresses.get(0), res[0]);
+        geocoder.getFromLocation(lat, lon, 1, list -> {
+            if (list != null && !list.isEmpty())
+                res[0] = extractName(list.get(0), res[0]);
             latch.countDown();
         });
-        try {
-            latch.await(5, TimeUnit.SECONDS);
-        } catch (InterruptedException ignored) {}
+        try { latch.await(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
         locText = res[0];
 
         ZonedDateTime now = ZonedDateTime.now(ZoneId.systemDefault());
         double elev = SunPosition.compute().on(now).at(lat, lon).execute().getAltitude();
 
         rv.setTextViewText(R.id.widget_text, locText);
-        rv.setTextViewText(R.id.widget_value, String.format(Locale.US, "%.2f°", elev));
+        rv.setTextViewText(R.id.widget_value,
+                String.format(Locale.US, "%.2f°", elev));
         awm.updateAppWidget(widgetId, rv);
     }
 
